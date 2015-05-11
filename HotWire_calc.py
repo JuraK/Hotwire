@@ -4,9 +4,9 @@
 from __future__ import division
 from math import *
 import numpy as np
-import matplotlib.pyplot as plt
+from scipy import signal
 
-class Data_Point:
+class DataPoint:
   '''
   Data structure for storage all the data and information from one measured point.
   data_time - np.array of time records corresponding to the measured data
@@ -29,22 +29,25 @@ class Data_Point:
     self.position_no=position_no
 
 
-class CTA_Mereni:
+class HotWireMeasurement:
   '''
   This class is responsible for all the data processing
   
-  soubor='./data/soubor.txt'
-  kalibrace=[0, 1, 2, 3, 4, 5] # nebo =[ [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5] ] pro dvoudrátkovou sondu
+  in_file='./data/in_file.txt'
+  calibration=[0, 1, 2, 3, 4, 5] # nebo =[ [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5] ] pro dvoudrátkovou sondu
   '''
-  def __init__(self, soubor, calibr_coeff=-1, teplota_kalibrace=20, teplota_experiment=7, teplota_zhaveni=260):
-    self.data_points=[] #Pole tříd jednotlivých měření (data + informace o daném měření - čas, datum, pozice, číslo pozice)
-    self.sensors_calibration=[] #Kalibrační konstanty pro každou drátek sondy
-    self.sensors_no=-1 #Počet senzorů
+  def __init__(self, in_file, calibr_coeff=-1, calibration_temper=20, experiment_temper=7, wire_temper=260):
+    self.DataPoints=[] #List of measurement points (data + info about the measurement point -time, date, position, no of position)
+    self.sensors_calibration=[] #Calibration coeff for each wire
+    self.sensors_no=-1 #Number of wires
     self.corr_T=1
-    self.probes_no=-1 #Počet sond
-    self.positions=-1 #Počet měřicích pozic
+    self.probes_no=-1 #Number of probes
+    self.positions=-1 #Number of measured positions
     self.temperature_probe=False
     self.directional_calib_made=False
+    self.k1=0
+    self.k2=0
+    self.TI_UV=0
     
     #------Pro směrovou kalibraci------
     self.U1_aver=np.array([]) #Ve směru drátku
@@ -56,10 +59,13 @@ class CTA_Mereni:
     self.U_RMS=np.array([]) #Ve směru sondy
     self.V_RMS=np.array([]) #Ve směru sondy
     
-    self.temper_corr(teplota_experiment, teplota_zhaveni, teplota_kalibrace) #Vypočte teplotní korekci
-    self.read_data(soubor) #Načte data
+    self.data_points=[] #List of all data points for the measurement
+    self.text=''
     
-    print "calibr_coeff =", calibr_coeff
+    self.read_data(in_file) #Reads the data from text file    
+    self.temper_corr(experiment_temper, wire_temper, calibration_temper) #Calculates the temperature correction
+    
+    #print "calibr_coeff =", calibr_coeff
     if calibr_coeff != -1:
       print 'Adjusting data with given calibration coefficients.' #'Provádím kalibraci dle externě zadaných koeficientů.'
       if (len(calibr_coeff)==2 and self.sensors_no == 2):
@@ -67,18 +73,26 @@ class CTA_Mereni:
       elif len(calibr_coeff) == 6:
         self.sensors_calibration=[calibr_coeff]
       
-    self.kalibrace(self.sensors_calibration) #Provede přepočet z napětí na rychlosti dle kalibračních koeficientů
+    self.calibration(self.sensors_calibration) #Converts voltage into velocity according to calibration coefficients
     
-    self.x=np.array([i.x for i in self.data_points]) #Pozice měření (uvažuje se 1D posuv)
-    self.prumery=np.array([np.average(i.data) for i in self.data_points]) #Průměrné hodnoty rychlostí
-    self.RMS=np.array([np.std(i.data) for i in self.data_points]) 
+    if not (self.k1 == 0 and self.k2 == 0):
+      if self.k1>5 or self.k2>5:
+        self.directional_calibration(1/self.k1,1/self.k2) #TODO it is not necessary if directional calibration is correct
+      else:
+        self.directional_calibration(self.k1,self.k2)
+    
+    self.x=np.array([i.x for i in self.data_points]) #Numpy array of all positions (assumed only 1D traversing) TODO: Extend it into 3D
+    self.prumery=np.array([np.average(i.data) for i in self.data_points]) #Numpy array of average velocities in each point
+    self.RMS=np.array([np.std(i.data) for i in self.data_points]) #Numpy array of root mean square (np.std() ) in each point
     if self.sensors_no >1:
-      self.prumery2=np.array([np.average(i.data2) for i in self.data_points]) #Průměrné hodnoty rychlostí
+      self.prumery2=np.array([np.average(i.data2) for i in self.data_points]) #Numpy array of second wire average velocities in each point
       self.RMS2=np.array([np.std(i.data2) for i in self.data_points]) 
-      
-  
+      self.TI=np.sqrt(1/2.*self.RMS**2+self.RMS2**2)/(np.sqrt(self.prumery**2+self.prumery2**2))
+        
   def temper_corr(self, T1, Tw, T0):
     '''
+    Performes data correction for different gas temperature than during calibration.
+    
     T1 - [°C] temperature during experiment
     Tw - [°C] wire temperature
     T0 - [°C] reference temperature (during calibration)
@@ -89,19 +103,22 @@ class CTA_Mereni:
     U/nu=f(E^2/(k*dT))
     dT=Tw-Ta 
     '''
+    
+    #Check for reasonable temperature user input
     if not((-20 < T1 < 300) and (0<Tw<800) and (-20<T0<300)):
-      print "Error!: Wrong temperature for temperature correction"
+      self.text += "Error!: Wrong temperature for temperature correction\n"
       self.corr_T = -1
       return -1    
     
     if T1 is not False:
       #m = 2e-5+5e-8*T1+3e-11*T1**2 # Temperature loading factor - from physical library [StreamWare Pro, Installation and User Guide], temperature input in [°C], page no. 266 - WRONG!!
       m=0.2
+      #m=0.1 #Alternative option
       T1+=273.15
       Tw+=273.15
       T0+=273.15
-      print "m =",m
-      #m=0.1
+      self.text += "m = "+str(m)+'\n'
+            
       if T0 > T1:
         self.corr_T = ((Tw-T0)/(Tw-T1))**(0.5*(1-m))
       else:
@@ -109,44 +126,52 @@ class CTA_Mereni:
     else:
       self.corr_T = 1 
       
-  def __repr__(self):
-    print "Coefficient for temperature adjustment:", self.corr_T,"->resulting change by",100-self.corr_T*100,"%" #Koeficient pro teplotní kalibraci
-    print "Calibration coefficients C0..C5:",self.sensors_calibration# C0,C1,C2,C3,C4,C5
-    print 'Number of measurement points x:',len(self.data_points) #data.shape[0]
-    print 'Number of samples at one measurement point:',self.data_points[0].data.shape[0] #data.shape[1]
-    print
-    print "Number of sensors (wires):", self.sensors_no
-    if self.sensors_no == 1:
-      print '{0:>5s} {1:>9s} {2:>7s} {3:>7s}'.format('x', 'Average', 'RMS', 'I')
-      print '{0:>5s} {1:>7s} {2:>7s} {3:>7s}'.format('[mm]', '[m/s]', '[m/s]', '[%]')
-      for i in range(len(self.data_points)):
-        print '{0:>5g} {1:>7.3f} {2:>7.3f} {3:>7.3f}'.format(self.x[i], self.prumery[i], self.RMS[i], self.RMS[i]/self.prumery[i]*100)
-    elif self.sensors_no > 1:
-      print '{0:>5s} {1:>9s} {2:>7s} {3:>7s} {4:>9s} {5:>7s} {6:>7s}'.format('x', 'Average', 'RMS', 'I', 'AVerage2', 'RMS2', 'I2')
-      print '{0:>5s} {1:>7s} {2:>7s} {3:>7s} {4:>7s} {6:>7s} {6:>7s}'.format('[mm]', '[m/s]', '[m/s]', '[%]', '[m/s]', '[m/s]', '[%]')
-      for i in range(len(self.data_points)):
-        print '{0:>5g} {1:>7.3f} {2:>7.3f} {3:>7.3f} {4:>7.3f} {5:>7.3f} {6:>7.3f}'.format(self.x[i], self.prumery[i], self.RMS[i], self.RMS[i]/self.prumery[i]*100, self.prumery2[i], self.RMS2[i], self.RMS2[i]/self.prumery2[i]*100)
-      if self.directional_calib_made:
-        print
-        print '{0:>5s} {1:>9s} {2:>7s} {3:>7s} {4:>9s} {5:>7s} {6:>7s}'.format('x', 'U', 'U_RMS', 'U_I', 'V', 'V_RMS', 'V_I')
-        print '{0:>5s} {1:>7s} {2:>7s} {3:>7s} {4:>7s} {6:>7s} {6:>7s}'.format('[mm]', '[m/s]', '[m/s]', '[%]', '[m/s]', '[m/s]', '[%]')
-        for i in range(len(self.data_points)):
-          print '{0:>5g} {1:>7.3f} {2:>7.3f} {3:>7.3f} {4:>7.3f} {5:>7.3f} {6:>7.3f}'.format(self.x[i], self.U_aver[i], self.U_RMS[i], self.U_RMS[i]/self.U_aver[i]*100, self.V_aver[i], self.V_RMS[i], self.V_RMS[i]/self.V_aver[i]*100)
+  def __str__(self):
+    text = '\n'
+    text += ("Coefficient for temperature adjustment: %.2f->resulting change by %.2f %%\n")%(self.corr_T, 100-self.corr_T*100) #Koeficient pro teplotní kalibraci
+    text += "Calibration coefficients C0..C5: "+str(self.sensors_calibration)+'\n'# C0,C1,C2,C3,C4,C5
+    text += 'Number of measurement points x: '+str(len(self.data_points))+'\n' #data.shape[0]
+    text += 'Number of samples at one measurement point: '+str(self.data_points[0].data.shape[0])+'\n' #data.shape[1]
+    text += "Number of sensors (wires): "+ str(self.sensors_no)+'\n'
+    if self.directional_calib_made:
+      text += ('Directional calibration constants: k1 = %f; k2 = %f\n')%(self.k1, self.k2)
     
-    return ''
+    if self.sensors_no == 1:
+      text += '{:>5s} {:>9s} {:>7s}\n'.format('x', 'Average', 'TI')
+      text += '{:>5s} {:>9s} {:>7s}\n'.format('[mm]', '[m/s]', '[%]')
+      for i in range(len(self.data_points)):
+        text += '{:>5g} {:>9.3f} {:>7.3f}\n'.format(self.x[i], self.prumery[i], self.RMS[i]/self.prumery[i]*100)
+    elif self.sensors_no > 1:
+      text += '{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('x', 'Average', 'AVerage2', 'TI')
+      text += '{:>5} {:>9} {:>9} {:>7}\n'.format('[mm]', '[m/s]', '[m/s]', '[%]')
+      for i in range(len(self.data_points)):
+        text += '{:>5g} {:>9.3f} {:>9.3f} {:>7.3f}\n'.format(self.x[i], self.prumery[i], self.prumery2[i], self.TI[i]*100)
+      if self.directional_calib_made:
+        text += '\n'
+        text += '{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('x', 'U', 'V', 'TI')
+        text += '{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('[mm]', '[m/s]', '[m/s]', '[%]')
+        for i in range(len(self.data_points)):
+          text += '{:>5g} {:>9.3f} {:>9.3f} {:>7.3f}\n'.format(self.x[i], self.U_aver[i], self.V_aver[i], self.TI_UV[i]*100)
+    
+    text +='\n'
+    return self.text+text
   
   
-  def read_data(self,soubor):
-    hodnoty=np.array([])
-    hodnoty2=np.array([])
-    hodnoty_time=np.array([])
+  def read_data(self,in_file):
+    '''
+    Loads data from text file exported from Dantec's software StreamWare
+    '''
+    
+    values=np.array([])
+    values2=np.array([])
+    values_time=np.array([])
     sw=-1
     sens_order=-1
     
-    print
-    print '----File: ',file_in,'----'
+    self.text +='\n'
+    self.text += '----File: '+in_file+' ----'
 
-    with open(soubor,'r') as fh:
+    with open(in_file,'r') as fh:
       for line in fh:
         
         if line[0:14]=='[FILE HEADER]:':
@@ -158,12 +183,12 @@ class CTA_Mereni:
           temperature_probe=False
         elif line[0:14]=='[DATA HEADER]:':
           sw=3
-          if hodnoty.shape[0]>0:
-            self.data_points.append( Data_Point(hodnoty_time, hodnoty, ac_date, ac_time, x, y, z, position_no, hodnoty2) )
-            #print "Hodnoty:", hodnoty[0]
-            hodnoty=np.array([])
-            hodnoty2=np.array([])
-            hodnoty_time=np.array([])
+          if values.shape[0]>0:
+            self.data_points.append( DataPoint(values_time, values, ac_date, ac_time, x, y, z, position_no, values2) )
+            #print "Hodnoty:", values[0]
+            values=np.array([])
+            values2=np.array([])
+            values_time=np.array([])
         elif '[DATA BLOCK' in line:
           sw=4
         
@@ -198,11 +223,15 @@ class CTA_Mereni:
                 C5=float(line.split()[1])
                 self.sensors_calibration.append([C0,C1,C2,C3,C4,C5])
                 #print "Kalibrační koeficienty2: ", self.sensors_calibration
+              elif "	k =" in line:
+                self.k1=float(line.split()[-2]) #TODO - should be k1**0.5?
+                self.k2=float(line.split()[-1]) #TODO - should be k2**0.5?
+                #print ("Načteno k1 = %f, k2 = %f")%(self.k1,self.k2)
             
             if 'No. of Sensors' in line:
               self.sensors_no=float(line.split()[-1])
               sens_order=0
-            #Načte kalibrační koeficienty C0..C5 pro drátek 1
+            #Reads calibration coefficients C0..C5 for wire no 1
             elif line[0:3] == "C0:" and sens_order == 0:
               C0=float(line.split()[1])
             elif line[0:3] == "C1:" and sens_order == 0:
@@ -215,72 +244,83 @@ class CTA_Mereni:
               C4=float(line.split()[1])
             elif line[0:3] == "C5:" and sens_order == 0:
               C5=float(line.split()[1])
-              sens_order=1 #Můžou se začít načítat data o kalibraci druhého drátku
+              sens_order=1 #Calibration data of the second wire can be loaded in next step
               self.sensors_calibration.append([C0,C1,C2,C3,C4,C5])
-              #print "Kalibrační koeficienty: ", self.sensors_calibration
+              #print "CAlibration coefficients: ", self.sensors_calibration
             
             
             
         if sw==3: #DATA HEADER
-          #Načte informaci o poloze sondy v aktuálním měřicím bodě
+          #Reads info about probe position in current measurement point
           if line[0:15] == "(mm,mm,mm,deg):":
             x,y,z,deg = [float(i) for i in line.split()[1:]]
             #print "x,y,z:", x,y,z
-          #Načte obecné informace o této sadě měření (ID, čas, datum, ...)
+          #Reads general info about the measurement set (ID, time, date, ...)
           elif 'Acquisition time:' in line:
             ac_time = line.split()[-1]
           
           elif 'Acquisition date:' in line:
             if not '.' in line.split()[-1]:
-              print 'Není tam čas !!!!!'
+#              print 'There is no time specified!!!!!'
               ac_date = line.split()[-1]
                         
           elif 'Position no.:' in line:
             position_no= int(line.split()[-1])
             
-        if sw == 4: #Jsme v bloku naměřených dat
-          if len(line.strip())>0 and line.strip()[0].isdigit(): # testuje zda první pozice na řádku je číslo
-            E = float(line.strip().split()[1]) * self.corr_T # Včetně teplotní korekce
+        if sw == 4: #We are in the block of measured data
+          if len(line.strip())>0 and line.strip()[0].isdigit(): # Is the first char on line the number?
+            E = float(line.strip().split()[1]) * self.corr_T # Reads voltage and makes correction for temperature
             if self.sensors_no > 1:
-              E2 = float(line.strip().split()[2]) * self.corr_T # Včetně teplotní korekce
+              E2 = float(line.strip().split()[2]) * self.corr_T # Reads voltage and makes correction for temperature on second wire
             #C0,C1,C2,C3,C4,C5=self.sensors_calibration[0]
-            #U=C0+C1*E+C2*E**2+C3*E**3+C4*E**4+C5*E**5 # Aplikována kalibrace
-            hodnoty=np.append(hodnoty, E)
-            hodnoty2=np.append(hodnoty2, E2)
-            hodnoty_time=np.append(hodnoty_time, float(line.strip().split()[0]))
-            #print hodnoty[-1]
+            #U=C0+C1*E+C2*E**2+C3*E**3+C4*E**4+C5*E**5 # Aplikována calibration
+            values=np.append(values, E)
+            values2=np.append(values2, E2)
+            values_time=np.append(values_time, float(line.strip().split()[0]))
+            #print values[-1]
           
-          #elif ('[DATA HEADER' in line) and len(hodnoty)>0:
-            #self.data_points.append( Data_Point(hodnoty_time, hodnoty, ac_date, ac_time, x, y, z, position_no, hodnoty2) )
-            #print "Hodnoty:", hodnoty[0]
-            #hodnoty=np.array([])
-            #hodnoty2=np.array([])
-            #hodnoty_time=np.array([])
-                      
-    self.data_points.append( Data_Point(hodnoty_time, hodnoty, ac_date, ac_time, x, y, z, position_no, hodnoty2) )
-    #print "Hodnoty:", hodnoty[0]
+          #elif ('[DATA HEADER' in line) and len(values)>0:
+            #self.data_points.append( DataPoint(values_time, values, ac_date, ac_time, x, y, z, position_no, values2) )
+            #print "Hodnoty:", values[0]
+            #values=np.array([])
+            #values2=np.array([])
+            #values_time=np.array([])
+    
+    #Pass all the read data into the list of all data points
+    self.data_points.append( DataPoint(values_time, values, ac_date, ac_time, x, y, z, position_no, values2) )
+    
             
-  def kalibrace(self,coeff):
+  def calibration(self,coeff):
     '''
-    Provede přepočet z napětí na rychlosti dle kalibračních koeficientů    
+    Converts voltage into valocity according to calibration coefficients.
     '''
-    if len(coeff) == 2 and self.sensors_no ==2: #Dvoudrátková sonda
+    
+    #------------Two-wire probe------------
+    if len(coeff) == 2 and self.sensors_no ==2: 
       
       C0,C1,C2,C3,C4,C5=coeff[0]
       C0b,C1b,C2b,C3b,C4b,C5b=coeff[1]
       for dp in self.data_points:
-        dp.data=C0+C1*dp.data+C2*dp.data**2+C3*dp.data**3+C4*dp.data**4+C5*dp.data**5 # Aplikována kalibrace
-        dp.data2=C0b+C1b*dp.data2+C2b*dp.data2**2+C3b*dp.data2**3+C4b*dp.data2**4+C5b*dp.data2**5 # Aplikována kalibrace
-    elif len(coeff) == 1: #Jednodrátková sonda
+        dp.data=C0+C1*dp.data+C2*dp.data**2+C3*dp.data**3+C4*dp.data**4+C5*dp.data**5 # Aplikována calibration
+        dp.data2=C0b+C1b*dp.data2+C2b*dp.data2**2+C3b*dp.data2**3+C4b*dp.data2**4+C5b*dp.data2**5 # Aplikována calibration
+    
+    #------------One-wire probe------------
+    elif len(coeff) == 1: 
       C0,C1,C2,C3,C4,C5=coeff[0]
       for dp in self.data_points:
-        dp.data=C0+C1*dp.data+C2*dp.data**2+C3*dp.data**3+C4*dp.data**4+C5*dp.data**5 # Aplikována kalibrace
+        dp.data=C0+C1*dp.data+C2*dp.data**2+C3*dp.data**3+C4*dp.data**4+C5*dp.data**5 # Aplikována calibration
+    #------------------------------------
+        
     else:
-      print 'Error!: Wrong input of calibration coefficients!' #'Chyba: Špatně zadané kalibrační koeficienty!'
+      print 'Error!: Wrong input of calibration coefficients!' #'Error: Špatně zadané kalibrační koeficienty!'
+      #raise NameError('Wrong input of calibration coefficients')
       
-  def smerova_kalibrace(self, k1, k2):
+      
+  def directional_calibration(self, k1, k2):
     '''
-    Směrová kalibrace dle zadaných koeficientů - musí se volat extra. Není v defaultním běhu!
+    Directional calibration according given coefficients - has to be called by user. It is not incorporated in the class run.
+    
+    k1, k2 - coefficients from velocity calibration    
     '''
     for dp in self.data_points:
       U1=((2**0.5)/2)*(np.abs((1+k2**2)*dp.data2**2-k2**2*dp.data**2)**0.5)
@@ -300,104 +340,77 @@ class CTA_Mereni:
       
       self.U_RMS=np.append(self.U_RMS,np.std(U))
       self.V_RMS=np.append(self.V_RMS,np.std(V))
+      
+    self.TI_UV=np.sqrt(1/2.*self.U_RMS**2+self.V_RMS**2)/(np.sqrt(self.U_aver**2+self.V_aver**2))
     
     self.directional_calib_made=True
       
-#######################x
-#itoe = 3276.8166089965 # Převod integer na napětí - vždy zkontrolovat !!!!!!!
-#######################x
 
+  def fft_analysis(self,position=None):
+    '''
+    Performes Fast fourier analysis on data sets and returns either five most significant frequencies or numpy arrays of 
+    frequencies and power spectrum when specific position number is passed as parameter.
+    '''
 
-#---Teplotní korekce---
-
-#######################x
-T1 = False #Teplota během experimentu, zadej False pro vypnutí korekce
-#######################x
-
-#Délka sondy + držáku
-Lsondy=255.
-Pozice_korekce=Lsondy-250-3
-
-#if T1 is not False:
-  #Tw = 215. #Teplota žhaveného drátku
-  #T0 = 25. #Referenční teplota (při kalibraci)
-  #m = 2e-5+5e-8*T1+3e-11*T1**2 # Temperature loading factor - from physical library
-  #if T0 > T1:
-    #corr_T = ((Tw-T0)/(Tw-T1))**(0.5*(1-m))
-  #else:
-    #corr_T = ((Tw-T0)/(Tw-T1))**(0.5*(1+m))
-#else:
-  #corr_T = 1
-
-#a = np.genfromtxt('GlobalExport1.txt',skip_header=1)
-
-prumery=[]
-pozice_all=[]
-cta=[]
-
-#directory="./2015_01_28/"
-directory="./2015_02_12_2wire/"
-
-#files=['Tryska_Alkion_300mm.txt','Tryska_Alkion_500mm.txt','Tryska_Tuma_v00-300mm.txt','Tryska_Tuma_v00-500mm.txt']
-#files=['GlobalExport_vir_01.txt']
-files=['01_006_short.txt']
-
-for file_in in files:
+    if position is None:
+      freqs_5=np.array([])
+      
+      for dp, pr in zip(self.data_points, self.prumery):
+        time_step=(dp.data_time[-1]-dp.data_time[0])/dp.data.size
+        ps=np.abs(np.fft.rfft(dp.data-pr))**2 #Power spectrum
+      
+        freqs = np.fft.rfftfreq(dp.data.size, time_step)
+        peakind = signal.find_peaks_cwt(ps, np.arange(1,50))
+        freqs_5 = np.append(freqs_5,freqs[peakind[:5]])
+        
+      return freqs[peakind[:5]] #Returns first five most significant frequencies
+    
+    else: #Returns arrays of frequencies and power spectrum and five most significant frequencies.
+      for dp,pr in zip(self.data_points, self.prumery):
+        if position == dp.position_no:
+          time_step=(dp.data_time[-1]-dp.data_time[0])/dp.data.size
+          ps=np.abs(np.fft.rfft(dp.data-pr))**2 #Power spectrum
+          #ps=np.angle(np.fft.rfft(dp.data-pr)) #Phase spectrum
+          #ps=20*np.log10(np.abs(np.fft.rfft(dp.data-pr))) #Amplitude spectrum in [dB]
+        
+          freqs = np.fft.rfftfreq(dp.data.size, time_step)
+          peakind = signal.find_peaks_cwt(ps, np.arange(1,50))
+          
+          
+          return freqs, ps, freqs[peakind[:5]]
+      
+if __name__ == "__main__":
+  import matplotlib.pyplot as plt
+  import HotWire_calc as hw
   
-  #cta.append(CTA_Mereni(directory+file_in, [23.627550,-47.563171,36.200703,-13.087972,2.099148,0], 19.5, 7, 260 )) #./2015_01_28/GlobalExport_vir_01.txt Načte data pro daný soubor file_in, uloží je do třídy CTA_Mereni a třídu uloží do pole cta
-  cta.append(CTA_Mereni(directory+file_in,[[23.627550,-47.563171,36.200703,-13.087972,2.099148,0],[23.627550,-47.563171,36.200703,-13.087972,2.099148,0]]))
-  #cta[-1].kalibrace([23.627550,-47.563171,36.200703,-13.087972,2.099148,0])
-  #cta[-1].prumery=np.array([np.average(i.data) for i in cta[-1].data_points]) #Průměrné hodnoty rychlostí
-  #cta[-1].RMS=np.array([np.std(i.data) for i in cta[-1].data_points]) 
+  T1 = False #Temperature during experimet, put False to turn it off
   
-  cta[0].smerova_kalibrace(12.18**0.5, 15.6**0.5)
-  print cta[-1] #Vytiskne informace o daném měření
+  cta=[]
+#  directory="./2015_02_12_2wire/"
+#  files=['01_006_short.txt']
+  directory='Viric_data/viric_240_25/0,1D/'
+  file_in='240_25_01_00.txt'
   
-  ##print 'U0 =', U0
-  #plt.grid()
-  ##plt.axis([-0.05,0.5,1,4.5]) #0.35,1.8
-  ##plt.plot( (150-(pozice+Pozice_korekce))/300 ,prumer,'o-') #prumer/U0
-  #plt.plot( cta[-1].x ,cta[-1].prumery,'o-') #prumer/U0
-
-  #plt.xlabel('r [mm]')
-  #plt.ylabel('U [m/s]')
   
-  #plt.rcParams.update({'font.size': 22})
-  ##plt.savefig(file_in[:-4]+'.eps',bbox_inches='tight')
-  #print "Ukládám obrázek:",file_in[:-4]+".eps"
-  ##plt.show()
-  #plt.close()
-
-  ##plt.plot(data_time[0], data[0])
-  ##plt.show()
-
-#print 'Srovnání průměrů:'
-#for p in range(cta[0].prumery.shape[0]):
-  #print
-  #for i in cta:  
-    #print i.prumery[p],
-
-
-
-plt.grid()
-plt.plot( cta[0].x ,cta[0].U_aver,'x-',label=files[0][:-4]) #prumer/U0
-plt.plot( cta[0].x ,cta[0].V_aver,'x-',label=files[0][:-4]+' 2') #prumer/U0
-#plt.plot( cta[1].x ,cta[1].prumery,'x-',label=files[1]) #prumer/U0
-#plt.plot( cta[2].x ,cta[2].prumery,'x-',label=files[2]) #prumer/U0
-plt.xlabel('r [mm]')
-plt.ylabel('U [m/s]')
-plt.legend()
-plt.rcParams.update({'font.size': 22})
-##plt.savefig(directory+'srovnani_300.eps',bbox_inches='tight')
-plt.show()
-
-#plt.close()
-#plt.grid()
-##plt.plot( cta[1].x ,cta[1].prumery,'x-') #prumer/U0
-##plt.plot( cta[3].x ,cta[3].prumery,'x-') #prumer/U0
-##plt.xlabel('r [mm]')
-##plt.ylabel('U [m/s]')
-##plt.rcParams.update({'font.size': 22})
-###plt.savefig('srovnani_500.eps',bbox_inches='tight')
-##plt.show()
-##plt.close()
+#    cta.append(hw.HotWireMeasurement(directory+file_in,[[23.627550,-47.563171,36.200703,-13.087972,2.099148,0],[23.627550,-47.563171,36.200703,-13.087972,2.099148,0]]))
+#    cta.directional_calibration(12.18**0.5, 15.6**0.5)    
+  cta=hw.HotWireMeasurement(directory+file_in)
+  peaks=cta.fft_analysis()
+#    cta.directional_calibration()
+  print cta #Vytiskne informace o daném měření
+  print 'Significant frequencies: ',peaks,'Hz'
+    
+  plt.grid()
+  plt.plot( cta.x ,cta.U_aver,'x-',label=file_in[0][:-4]+' U') #prumer/U0
+  plt.plot( cta.x ,cta.V_aver,'x-',label=file_in[0][:-4]+' V') #prumer/U0
+  plt.xlabel('r [mm]')
+  plt.ylabel('U [m/s]')
+  plt.legend()
+  plt.rcParams.update({'font.size': 20})
+  plt.show()
+  
+  fr,ps=cta.fft_analysis(3)[:2]
+  plt.xlabel('Frequency [Hz]')
+  plt.ylabel('Power spectrum')
+  plt.plot(fr,ps)
+  plt.show()
