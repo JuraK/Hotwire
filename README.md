@@ -1,4 +1,4 @@
-# Hotwire
+# Hot Wire
 Hotwire anemometry data processing from Dantec StreamWare
 
 This Python script can process raw data measured by a hot-wire anemometer. Current implementation is ready for dealing with a text file exported from Dantec software - StreamWare. So far it can deal with one and two wire probe.
