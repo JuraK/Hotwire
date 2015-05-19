@@ -37,7 +37,7 @@ class HotWireMeasurement:
   calibration=[0, 1, 2, 3, 4, 5] # nebo =[ [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5] ] pro dvoudrátkovou sondu
   '''
   def __init__(self, in_file, calibr_coeff=-1, calibration_temper=20, experiment_temper=7, wire_temper=260):
-    self.DataPoints=[] #List of measurement points (data + info about the measurement point -time, date, position, no of position)
+    #self.DataPoints=[] #List of measurement points (data + info about the measurement point -time, date, position, no of position)
     self.sensors_calibration=[] #Calibration coeff for each wire
     self.sensors_no=-1 #Number of wires
     self.corr_T=1
@@ -58,9 +58,12 @@ class HotWireMeasurement:
     self.V_aver=np.array([]) #Ve směru sondy
     self.U_RMS=np.array([]) #Ve směru sondy
     self.V_RMS=np.array([]) #Ve směru sondy
+#    self.U_mag=np.array([]) #Velocity magnitude
+#    self.phi=np.array([]) #Angle between U and V velocity components
     
     self.data_points=[] #List of all data points for the measurement
     self.text=''
+    self.nan_val_index=[] #Ratio of NaN count in directionally calibrated data to the total data count for every Data Point
     
     self.read_data(in_file) #Reads the data from text file    
     self.temper_corr(experiment_temper, wire_temper, calibration_temper) #Calculates the temperature correction
@@ -135,23 +138,24 @@ class HotWireMeasurement:
     text += "Number of sensors (wires): "+ str(self.sensors_no)+'\n'
     if self.directional_calib_made:
       text += ('Directional calibration constants: k1 = %f; k2 = %f\n')%(self.k1, self.k2)
+      text += ('NaN index in position %d is %g %%\n')%(self.x[np.argmax(self.nan_val_index)], self.nan_val_index[np.argmax(self.nan_val_index)]*100)
     
     if self.sensors_no == 1:
-      text += '{:>5s} {:>9s} {:>7s}\n'.format('x', 'Average', 'TI')
+      text += '\n{:>5s} {:>9s} {:>7s}\n'.format('x', 'Average', 'TI')
       text += '{:>5s} {:>9s} {:>7s}\n'.format('[mm]', '[m/s]', '[%]')
       for i in range(len(self.data_points)):
         text += '{:>5g} {:>9.3f} {:>7.3f}\n'.format(self.x[i], self.prumery[i], self.RMS[i]/self.prumery[i]*100)
     elif self.sensors_no > 1:
-      text += '{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('x', 'Average', 'AVerage2', 'TI')
+      text += '\n{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('x', 'Average', 'AVerage2', 'TI')
       text += '{:>5} {:>9} {:>9} {:>7}\n'.format('[mm]', '[m/s]', '[m/s]', '[%]')
       for i in range(len(self.data_points)):
         text += '{:>5g} {:>9.3f} {:>9.3f} {:>7.3f}\n'.format(self.x[i], self.prumery[i], self.prumery2[i], self.TI[i]*100)
       if self.directional_calib_made:
         text += '\n'
-        text += '{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('x', 'U', 'V', 'TI')
-        text += '{:>5s} {:>9s} {:>9s} {:>7s}\n'.format('[mm]', '[m/s]', '[m/s]', '[%]')
+        text += '{:>5s} {:>9s} {:>9s} {:>7s} {:>7s} {:>7s}\n'.format('x', 'U', 'V', 'TI', 'Umag', 'PHI')
+        text += '{:>5s} {:>9s} {:>9s} {:>7s} {:>7s} {:>7s}\n'.format('[mm]', '[m/s]', '[m/s]', '[%]', '[m/s]', '[°]')
         for i in range(len(self.data_points)):
-          text += '{:>5g} {:>9.3f} {:>9.3f} {:>7.3f}\n'.format(self.x[i], self.U_aver[i], self.V_aver[i], self.TI_UV[i]*100)
+          text += '{:>5g} {:>9.3f} {:>9.3f} {:>7.3f} {:>7.3f} {:>7.3f}\n'.format(self.x[i], self.U_aver[i], self.V_aver[i], self.TI_UV[i]*100, self.U_mag[i], self.phi[i])
     
     text +='\n'
     return self.text+text
@@ -224,8 +228,8 @@ class HotWireMeasurement:
                 self.sensors_calibration.append([C0,C1,C2,C3,C4,C5])
                 #print "Kalibrační koeficienty2: ", self.sensors_calibration
               elif "	k =" in line:
-                self.k1=float(line.split()[-2]) #TODO - should be k1**0.5?
-                self.k2=float(line.split()[-1]) #TODO - should be k2**0.5?
+                self.k1=float(line.split()[-2]) 
+                self.k2=float(line.split()[-1])
                 #print ("Načteno k1 = %f, k2 = %f")%(self.k1,self.k2)
             
             if 'No. of Sensors' in line:
@@ -323,23 +327,36 @@ class HotWireMeasurement:
     k1, k2 - coefficients from velocity calibration    
     '''
     for dp in self.data_points:
-      U1=((2**0.5)/2)*(np.abs((1+k2**2)*dp.data2**2-k2**2*dp.data**2)**0.5)
-      U2=((2**0.5)/2)*(np.abs((1+k1**2)*dp.data**2-k1**2*dp.data2**2)**0.5)
+      
+      U1=(((0.5*(dp.data2**2)*(1+k2))-(0.5*(dp.data**2)*k2*(1+k1)))/(1-(k1*k2)))**0.5
+      U2=(((0.5*(dp.data**2)*(1+k1))-(0.5*(dp.data2**2)*k1*(1+k2)))/(1-(k1*k2)))**0.5
+      
+      U=((2**0.5)/2)*U1+((2**0.5)/2)*U2    #rychlost ve směru osy x
+      V=((2**0.5)/2)*U2-((2**0.5)/2)*U1     #rychlost ve směru osy y
+      
+      nan_val_count=np.max([np.count_nonzero(np.isnan(U1)),np.count_nonzero(np.isnan(U2))])
+      self.nan_val_index.append(nan_val_count/np.shape(U1)[0]) #Index of NaN values in velocity arrays
+      
+      #U1=((2**0.5)/2)*(np.abs((1+k2**2)*dp.data2**2-k2**2*dp.data**2)**0.5)
+      #U2=((2**0.5)/2)*(np.abs((1+k1**2)*dp.data**2-k1**2*dp.data2**2)**0.5)
 
-      U=((2**0.5)/2)*U1+((2**0.5)/2)*U2    #rychlost ve směru drátku 1
-      V=((2**0.5)/2)*U1-((2**0.5)/2)*U2     #rychlost ve směru drátku 2
+      #U=((2**0.5)/2)*U1+((2**0.5)/2)*U2    #rychlost ve směru drátku 1
+      #V=((2**0.5)/2)*U1-((2**0.5)/2)*U2     #rychlost ve směru drátku 2
       
-      self.U1_aver=np.append(self.U1_aver,np.mean(U1))
-      self.U2_aver=np.append(self.U2_aver,np.mean(U2))
+      self.U1_aver=np.append(self.U1_aver,np.nanmean(U1))
+      self.U2_aver=np.append(self.U2_aver,np.nanmean(U2))
       
-      self.U1_RMS=np.append(self.U1_RMS,np.std(U1))
-      self.U2_RMS=np.append(self.U2_RMS,np.std(U2))
+      self.U1_RMS=np.append(self.U1_RMS,np.nanstd(U1))
+      self.U2_RMS=np.append(self.U2_RMS,np.nanstd(U2))
       
-      self.U_aver=np.append(self.U_aver,np.mean(U))
-      self.V_aver=np.append(self.V_aver,np.mean(V))
+      self.U_aver=np.append(self.U_aver,np.nanmean(U))
+      self.V_aver=np.append(self.V_aver,np.nanmean(V))
       
-      self.U_RMS=np.append(self.U_RMS,np.std(U))
-      self.V_RMS=np.append(self.V_RMS,np.std(V))
+      self.U_RMS=np.append(self.U_RMS,np.nanstd(U))
+      self.V_RMS=np.append(self.V_RMS,np.nanstd(V))
+      
+      self.U_mag = (self.U_aver**2+self.V_aver**2)**0.5
+      self.phi = np.degrees(np.arctan2(self.V_aver,self.U_aver)) #TODO check if it is correct!
       
     self.TI_UV=np.sqrt(1/2.*self.U_RMS**2+self.V_RMS**2)/(np.sqrt(self.U_aver**2+self.V_aver**2))
     
@@ -388,9 +405,12 @@ if __name__ == "__main__":
   cta=[]
 #  directory="./2015_02_12_2wire/"
 #  files=['01_006_short.txt']
+#  directory='Viric_data/viric_240_25/0,1D/'
+#  file_in='240_25_01_00.txt'
+#  directory='Viric_data/smazat/'
+#  file_in='ověřovací měření - zpracované.txt'
   directory='Viric_data/viric_240_25/0,1D/'
   file_in='240_25_01_00.txt'
-  
   
 #    cta.append(hw.HotWireMeasurement(directory+file_in,[[23.627550,-47.563171,36.200703,-13.087972,2.099148,0],[23.627550,-47.563171,36.200703,-13.087972,2.099148,0]]))
 #    cta.directional_calibration(12.18**0.5, 15.6**0.5)    
