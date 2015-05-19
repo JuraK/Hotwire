@@ -36,7 +36,7 @@ class HotWireMeasurement:
   in_file='./data/in_file.txt'
   calibration=[0, 1, 2, 3, 4, 5] # nebo =[ [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5] ] pro dvoudrátkovou sondu
   '''
-  def __init__(self, in_file, calibr_coeff=-1, calibration_temper=20, experiment_temper=7, wire_temper=260):
+  def __init__(self, in_file, calibr_coeff=-1, calibration_temper=17, experiment_temper=False, wire_temper=260):
     #self.DataPoints=[] #List of measurement points (data + info about the measurement point -time, date, position, no of position)
     self.sensors_calibration=[] #Calibration coeff for each wire
     self.sensors_no=-1 #Number of wires
@@ -48,6 +48,9 @@ class HotWireMeasurement:
     self.k1=0
     self.k2=0
     self.TI_UV=0
+    self.calibration_temper=calibration_temper
+    self.experiment_temper=experiment_temper
+    self.wire_temper=wire_temper
     
     #------Pro směrovou kalibraci------
     self.U1_aver=np.array([]) #Ve směru drátku
@@ -63,10 +66,10 @@ class HotWireMeasurement:
     
     self.data_points=[] #List of all data points for the measurement
     self.text=''
-    self.nan_val_index=[] #Ratio of NaN count in directionally calibrated data to the total data count for every Data Point
+#    self.nan_val_index=[] #Ratio of NaN count in directionally calibrated data to the total data count for every Data Point
     
     self.read_data(in_file) #Reads the data from text file    
-    self.temper_corr(experiment_temper, wire_temper, calibration_temper) #Calculates the temperature correction
+    self.temper_corr(self.experiment_temper, wire_temper, self.calibration_temper) #Calculates the temperature correction
     
     #print "calibr_coeff =", calibr_coeff
     if calibr_coeff != -1:
@@ -120,7 +123,7 @@ class HotWireMeasurement:
       T1+=273.15
       Tw+=273.15
       T0+=273.15
-      self.text += "m = "+str(m)+'\n'
+      self.text += "\n\nm = "+str(m)
             
       if T0 > T1:
         self.corr_T = ((Tw-T0)/(Tw-T1))**(0.5*(1-m))
@@ -138,7 +141,7 @@ class HotWireMeasurement:
     text += "Number of sensors (wires): "+ str(self.sensors_no)+'\n'
     if self.directional_calib_made:
       text += ('Directional calibration constants: k1 = %f; k2 = %f\n')%(self.k1, self.k2)
-      text += ('NaN index in position %d is %g %%\n')%(self.x[np.argmax(self.nan_val_index)], self.nan_val_index[np.argmax(self.nan_val_index)]*100)
+#      text += ('NaN index in position %d is %g %%\n')%(self.x[np.argmax(self.nan_val_index)], self.nan_val_index[np.argmax(self.nan_val_index)]*100)
     
     if self.sensors_no == 1:
       text += '\n{:>5s} {:>9s} {:>7s}\n'.format('x', 'Average', 'TI')
@@ -203,6 +206,8 @@ class HotWireMeasurement:
             self.probes_no=line.split()[-1]
           elif 'Number of positions:' in line:
             self.positions=line.split()[-1]
+          elif 'Measurement Temperature [°C]:' in line:
+            self.experiment_temper=float(line.split(':')[-1].strip())
         
         if sw == 2:
           if 'teplot' in line:
@@ -210,6 +215,10 @@ class HotWireMeasurement:
             self.temperature_probe=True
           
           if not temperature_probe:
+            if "Cal. ref. temp.:" in line:
+              ll=line.split(':')[1].strip()
+              if len(ll)>0:
+                self.calibration_temper=float(ll)
             
             if self.sensors_no==2 and sens_order==1:
               #Načte kalibrační koeficienty C0..C5 pro drátek 2
@@ -330,19 +339,21 @@ class HotWireMeasurement:
       
       U1=(((0.5*(dp.data2**2)*(1+k2))-(0.5*(dp.data**2)*k2*(1+k1)))/(1-(k1*k2)))**0.5
       U2=(((0.5*(dp.data**2)*(1+k1))-(0.5*(dp.data2**2)*k1*(1+k2)))/(1-(k1*k2)))**0.5
-      
+
+      #------Check and correct NaN values in calculated velocities----
+      nan_i=np.append(np.where(np.isnan(U1)),np.where(np.isnan(U2)))
+      nan_i=np.unique(nan_i)
+      U1[nan_i]=(((0.5*(dp.data2[nan_i]**2)*(1+k2)))/(1-(k1*k2)))**0.5
+      U2[nan_i]=(((0.5*(dp.data[nan_i]**2)*(1+k1)))/(1-(k1*k2)))**0.5
+      #TODO check the correction of thsi behaviour - ignoring one part of equation when negativ value under sqrt.
+      #--------------------------------------------------------------
+
       U=((2**0.5)/2)*U1+((2**0.5)/2)*U2    #rychlost ve směru osy x
       V=((2**0.5)/2)*U2-((2**0.5)/2)*U1     #rychlost ve směru osy y
       
-      nan_val_count=np.max([np.count_nonzero(np.isnan(U1)),np.count_nonzero(np.isnan(U2))])
-      self.nan_val_index.append(nan_val_count/np.shape(U1)[0]) #Index of NaN values in velocity arrays
-      
-      #U1=((2**0.5)/2)*(np.abs((1+k2**2)*dp.data2**2-k2**2*dp.data**2)**0.5)
-      #U2=((2**0.5)/2)*(np.abs((1+k1**2)*dp.data**2-k1**2*dp.data2**2)**0.5)
-
-      #U=((2**0.5)/2)*U1+((2**0.5)/2)*U2    #rychlost ve směru drátku 1
-      #V=((2**0.5)/2)*U1-((2**0.5)/2)*U2     #rychlost ve směru drátku 2
-      
+#      nan_val_count=np.max([np.count_nonzero(np.isnan(U1)),np.count_nonzero(np.isnan(U2))])
+#      self.nan_val_index.append(nan_val_count/np.shape(U1)[0]) #Index of NaN values in velocity arrays
+#      
       self.U1_aver=np.append(self.U1_aver,np.nanmean(U1))
       self.U2_aver=np.append(self.U2_aver,np.nanmean(U2))
       
@@ -395,12 +406,75 @@ class HotWireMeasurement:
           
           
           return freqs, ps, freqs[peakind[:5]]
+
+
+def swirl_number(hws,R):
+  '''
+  Calculates the swirl number based on supplied list of Hot Wire measurements.
+  Assumes radial position x [mm] measured from the wall to the center i.e. x[0]=2mm; x[-1]=150mm, R=150mm
+  radius is then calculated as r=R-x
+  R [mm] - pipe radius
+  hws - list of HotWireMeasurement objects
+  '''
+  Gy=0
+  Gx=0
+  try:
+    p=hws[0].positions
+  except AttributeError: #Single data set supplied into hws
+    print "Supplied single data set for swirl nuber calculation!"
+    r=R-hws.x #TODO here it is pressumed, that x is sorted!
+    dr=np.array([R-r[0]])
+    for i in range(0,r.shape[0]-1):
+      dr=np.append(dr,r[i]-r[i+1])
+    for i in range(dr.shape[0]-1):
+      Gy+=dr[i]/2*(hws.U_aver[i+1]*hws.V_aver[i+1]*r[i+1]**2+hws.U_aver[i]*hws.V_aver[i]*r[i]**2)
+      Gx+=dr[i]/2*(hws.U_aver[i+1]**2*r[i+1]+hws.U_aver[i]**2*r[i])
+    S=Gy/(R*Gx) #Swirl number based on Weber, Roman, and Jacques Dugué. 1992. 
+                 #“Combustion Accelerated Swirling Flows in High Confinements.” 
+                 #Progress in Energy and Combustion Science 18 (4): 349–67. 
+                 #doi:10.1016/0360-1285(92)90005-L.
+    return S
+  
+  
+  #----Compare measured points if in same locations and proper order---
+  hx=hws[0].x
+  for h in hws[1:]:
+    if (not p==h.positions) or (not (h.x==hx).all):
+      print "Error: Positions are not the same in each data set, cannot calculate Swirl number!"
+      return -1
+    hx=h.x
+  #--------------------------------------------------------------------
+    
+  count=0
+  r=R-hws[0].x #TODO here it is pressumed, that x is sorted!
+
+  #---Calculates delta r  ---
+  dr=np.array([R-r[0]])
+  for i in range(0,r.shape[0]-1):
+      dr=np.append(dr,r[i]-r[i+1])
+  #--------------------------
+  
+  U_av=0
+  V_av=0
+  for h in hws:
+    U_av=((U_av*count)+h.U_aver)/(count+1) #Running average from different inclinations
+    V_av=((V_av*count)+h.V_aver)/(count+1) #Running average from different inclinations
+    count+=1
+  for i in range(dr.shape[0]-1):
+    Gy+=dr[i]/2*(U_av[i+1]*V_av[i+1]*r[i+1]**2+U_av[i]*V_av[i]*r[i]**2) #Numericall integration 
+    Gx+=dr[i]/2*(U_av[i+1]**2*r[i+1]+U_av[i]**2*r[i])
+  S=Gy/(R*Gx) #Swirl number based on Weber, Roman, and Jacques Dugué. 1992. 
+                 #“Combustion Accelerated Swirling Flows in High Confinements.” 
+                 #Progress in Energy and Combustion Science 18 (4): 349–67. 
+                 #doi:10.1016/0360-1285(92)90005-L.
+  return S
+  
+  
+      
       
 if __name__ == "__main__":
   import matplotlib.pyplot as plt
   import HotWire_calc as hw
-  
-  T1 = False #Temperature during experimet, put False to turn it off
   
   cta=[]
 #  directory="./2015_02_12_2wire/"
@@ -414,11 +488,12 @@ if __name__ == "__main__":
   
 #    cta.append(hw.HotWireMeasurement(directory+file_in,[[23.627550,-47.563171,36.200703,-13.087972,2.099148,0],[23.627550,-47.563171,36.200703,-13.087972,2.099148,0]]))
 #    cta.directional_calibration(12.18**0.5, 15.6**0.5)    
-  cta=hw.HotWireMeasurement(directory+file_in)
+  cta=hw.HotWireMeasurement(directory+file_in, wire_temper=260)
   peaks=cta.fft_analysis()
-#    cta.directional_calibration()
   print cta #Vytiskne informace o daném měření
   print 'Significant frequencies: ',peaks,'Hz'
+  
+  print "Swirl number:",swirl_number(cta,150)
     
   plt.grid()
   plt.plot( cta.x ,cta.U_aver,'x-',label=file_in[0][:-4]+' U') #prumer/U0

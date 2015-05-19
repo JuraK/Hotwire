@@ -10,10 +10,12 @@ import matplotlib.pyplot as plt
 import HotWire_calc as hw
 import os
 import numpy as np
-
+from multiprocessing import Pool
 
 #######################x
 U0=3.5 #[m/s] Uniform velocity 
+wire_temper=260 #[°C] Wire temperature 
+processor_no=4 #Number of processor cores on a PC
 #######################x
 
 prumery=[]
@@ -21,22 +23,7 @@ pozice_all=[]
 cta=[]
 rozmery=[]
 
-def get_sizes(filename):
-  if '.txt' in filename:
-    fnm=os.path.basename(filename)
-    rozmery=fnm[:-4].split('_')
-    return rozmery
-  elif 'viric_' in filename:
-    dirnm=os.path.dirname(filename).split('/')
-    m=[n for n,s in enumerate(dirnm) if 'viric_' in s][0]
-    vir=dirnm[m][6:-4]
-    lopatky=dirnm[m][-2:-1]
-    ax=dirnm[m+1][:-2]
-    if ax == '0,1':
-      ax='01'
-    elif ax == '1':
-      ax ='10'
-    return [vir,lopatky,ax,'']
+
 
 #-------Gets all the files in all the subdirectories---------
 directory='./Viric_data'
@@ -56,23 +43,68 @@ for root, directories, files in os.walk(directory):
       if '_' in filename:
         natoceni.append(filename.split('_')[-1][:-4]) # Get all the rotation angles
 #----------------------------------------------------------
-        
+
+
+#------Here you can restrict range of files to be processed--------------
+file_paths=file_paths[:30]
+ax=ax[:30]
+vir=vir[:30]
+natoceni=natoceni[:30]
+#------------------------------------------------------------------------
+
+#print file_paths
+
 ##---Gets all the data from all files------
-#for f in file_paths:
-#  #Načte data pro daný soubor f, uloží je do třídy HotWireMeasurement a třídu uloží do pole cta
-#  cta.append(hw.HotWireMeasurement(f)) 
+#def read_cta(filenm):
+#  return hw.HotWireMeasurement(filenm,wire_temper)
+#
+#p=Pool(processes=processor_no)
+#print len(file_paths)
+#cta=p.map(read_cta,file_paths)
+
+
+for f in file_paths:
+  #Načte data pro daný soubor f, uloží je do třídy HotWireMeasurement a třídu uloží do pole cta
+  cta.append(hw.HotWireMeasurement(f,wire_temper=wire_temper)) 
+
+for c in cta:
+  print c
+  
 ##-----------------------------------------
   
 #Eliminates repeates
 ax=np.unique(ax)
 vir=np.unique(vir)
 natoceni=np.unique(natoceni)
-print natoceni
+#print natoceni
 
-#Zde definuje které natočení mě budou zajímat
-natoceni=['05','15','25', '40']
-print ax, vir, natoceni
+nazev_ind=[]
+for v in vir:
+  for ax_pozice in ax:
+    if ax_pozice == '0,1D':
+      ax_pozice='01D'
+    elif ax_pozice == '1D':
+      ax_pozice='10D'
+      
+    for nat in natoceni:
+      txt=('D/'+v[6:]+'_'+ax_pozice[:-1]+'_'+nat+'.txt').replace(',','')
+      n=[n for n,s in enumerate(file_paths) if txt in s]
+      if len(n) > 0:
+        n=n[0]
+        nazev_ind.append(n)
+    ccs=[cta[c] for c  in nazev_ind ]
+    S=hw.swirl_number(ccs, 150)
+    print file_paths[nazev_ind[-1]][:16]+': Swirl nuber:',S
+    nazev_ind=[]
 
+
+
+#-------Zde definuje která natočení se budou tisknout do grafů------
+natoceni=['00','10','20', '30', '40']
+#---------------------------------------------------------
+
+
+#print ax, vir, natoceni
 nazev_ind=0
 for v in vir:
   for ax_pozice in ax:
@@ -87,15 +119,15 @@ for v in vir:
       if len(n) > 0:
         n=n[0]
         nazev_ind=n
-#        r_D=(150-cta[n].x)/300.
-#        U_U0=cta[n].U_mag/U0
-#        plt.plot(r_D,U_U0,label=nat)
-#    plt.xlabel('r/D [-]')
-#    plt.ylabel('U/U0 [-]')
-#    plt.legend()
-#    plt.savefig(file_paths[nazev_ind][:-16]+('/').join([v,ax_pozice,'U_mag.eps'])
+        r_D=(150-cta[n].x)/300.
+        U_U0=cta[n].U_mag/U0
+        plt.plot(r_D,U_U0,label=nat)
+    plt.xlabel('r/D [-]')
+    plt.ylabel('U/U0 [-]')
+    plt.legend()
+    plt.savefig(file_paths[nazev_ind][:-16]+'U_mag.eps')
     print 'Writing file: '+file_paths[nazev_ind][:-16]+'U_mag.eps' #('/').join([v,ax_pozice,'U_mag.eps'])
-#    plt.close()
+    plt.close()
         
     for nat in natoceni:
       txt=('D/'+v[6:]+'_'+ax_pozice[:-1]+'_'+nat+'.txt').replace(',','')
@@ -103,15 +135,15 @@ for v in vir:
       if len(n) > 0:
         n=n[0]
         nazev_ind=n
-#        r_D=(150-cta[n].x)/300.
-#        U_U0=cta[n].U_aver/U0
-#        plt.plot(r_D,U_U0,label=nat)
-#    plt.xlabel('r/D [-]')
-#    plt.ylabel('U/U0 [-]')
-#    plt.legend()
-#    plt.savefig(file_paths[nazev_ind][:-16]+('/').join([v,ax_pozice,'U_aver.eps'])
+        r_D=(150-cta[n].x)/300.
+        U_U0=cta[n].U_aver/U0
+        plt.plot(r_D,U_U0,label=nat)
+    plt.xlabel('r/D [-]')
+    plt.ylabel('U/U0 [-]')
+    plt.legend()
+    plt.savefig(file_paths[nazev_ind][:-16]+'U_aver.eps')
     print 'Writing file: '+file_paths[nazev_ind][:-16]+'U_aver.eps' #('/').join([v,ax_pozice,'U_aver.eps'])
-#    plt.close()
+    plt.close()
     
     for nat in natoceni:
       txt=('D/'+v[6:]+'_'+ax_pozice[:-1]+'_'+nat+'.txt').replace(',','')
@@ -119,25 +151,22 @@ for v in vir:
       if len(n) > 0:
         n=n[0]
         nazev_ind=n
-#        r_D=(150-cta[n].x)/300.
-#        V_U0=cta[n].V_aver/U0
-#        plt.plot(r_D,V_U0,label=nat)
-#    plt.xlabel('r/D [-]')
-#    plt.ylabel('V/U0 [-]')
-#    plt.legend()
-#    plt.savefig(file_paths[nazev_ind][:-16]+('/').join([v,ax_pozice,'V_aver.eps'])
+        r_D=(150-cta[n].x)/300.
+        V_U0=cta[n].V_aver/U0
+        plt.plot(r_D,V_U0,label=nat)
+    plt.xlabel('r/D [-]')
+    plt.ylabel('V/U0 [-]')
+    plt.legend()
+    plt.savefig(file_paths[nazev_ind][:-16]+'V_aver.eps')
     print 'Writing file: '+file_paths[nazev_ind][:-16]+'V_aver.eps' #('/').join([v,ax_pozice,'V_aver.eps'])
-#    plt.close()
-    
-    
-        
-#    print file_paths[nazev_ind][:-16]+'U_mag.eps'
+    plt.close()
+
     
 ##------------------------Tisk grafů U_mag vs x/D--------------------
 natoceni=['00','20']
 nn=[]
 x=10 #Pro jaký bod (poloměr) vykreslit axiální závislost
-ap=[]
+ap=np.array([])
 un=np.array([])
 for v in vir:
   for nat in natoceni:
@@ -153,27 +182,47 @@ for v in vir:
       if len(n) > 0:
         n=n[0]
         nazev_ind=n
-#        ui=np.where(cta[n].x==x)
-#        if ui.shape()[0]>0:
-#          un=np.append(un,cta[n].U_mag[ui])
-        ap.append(float(ax_pozice[:-1].replace(',','.')))
+        ui=np.where(cta[n].x==x)
+        if len(ui)>0:
+          un=np.append(un,cta[n].U_mag[ui])
+          ap=np.append(ap,float(ax_pozice[:-1].replace(',','.')))
         
-    
+    un_i=np.argsort(ap)
+    un=un[un_i]
+    ap=ap[un_i]
     U_U0=un/U0
-#    plt.plot(ap,U_U0,label=nat)
-    ap=[] #TODO nesmaže to předchozí graf?
+    plt.plot(ap,U_U0,label=nat)
+    ap=np.array([]) #TODO nesmaže to předchozí graf?
     un=np.array([])
-#  plt.xlabel('x/D [-]')
-#  plt.ylabel('U/U0 [-]')
-#  plt.legend()
-#  plt.savefig(file_paths[nazev_ind][:26]+('/').join([v,ax_pozice,'U_mag_ax.eps'])
+  plt.xlabel('x/D [-]')
+  plt.ylabel('U/U0 [-]')
+  plt.legend()
+  plt.savefig(file_paths[nazev_ind][:26]+'U_mag_ax.eps')
   print 'Writing file: '+file_paths[nazev_ind][:26]+'U_mag_ax.eps' #('/').join([v,ax_pozice,'U_mag_ax.eps'])
-#  plt.close()      
+  plt.close()      
 ## ----------------------------------------------------------------
     
     
     
-    
+def get_sizes(filename):
+  '''
+  From the file name extracts dimensions
+  '''
+  if '.txt' in filename:
+    fnm=os.path.basename(filename)
+    rozmery=fnm[:-4].split('_')
+    return rozmery
+  elif 'viric_' in filename:
+    dirnm=os.path.dirname(filename).split('/')
+    m=[n for n,s in enumerate(dirnm) if 'viric_' in s][0]
+    vir=dirnm[m][6:-4]
+    lopatky=dirnm[m][-2:-1]
+    ax=dirnm[m+1][:-2]
+    if ax == '0,1':
+      ax='01'
+    elif ax == '1':
+      ax ='10'
+    return [vir,lopatky,ax,'']
     
     
     
