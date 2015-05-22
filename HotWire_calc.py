@@ -469,7 +469,15 @@ def swirl_number(hws,R):
                  #doi:10.1016/0360-1285(92)90005-L.
   return S
   
+def flow_rate():
   
+  #výpočet průtoku   
+  
+   #☻U_av=0
+   #for h in hws:
+    #U_av=((U_av*count)+h.U_aver)/(count+1) #Running average from different inclinations
+   #for i in range(dr.shape[0]-1):
+    #S[i]=pi*(dr[i]/2*(U_av[i+1]*V_av[i+1]*r[i+1]**2+U_av[i]*V_av[i]*r[i]**2) #Numericall integration
       
       
 if __name__ == "__main__":
@@ -484,7 +492,7 @@ if __name__ == "__main__":
 #  directory='Viric_data/smazat/'
 #  file_in='ověřovací měření - zpracované.txt'
   directory='Viric_data/viric_240_25/0,1D/'
-  file_in='240_25_01_00.txt'
+  file_in='240_25_01_15.txt'
   
 #    cta.append(hw.HotWireMeasurement(directory+file_in,[[23.627550,-47.563171,36.200703,-13.087972,2.099148,0],[23.627550,-47.563171,36.200703,-13.087972,2.099148,0]]))
 #    cta.directional_calibration(12.18**0.5, 15.6**0.5)    
@@ -494,14 +502,43 @@ if __name__ == "__main__":
   print 'Significant frequencies: ',peaks,'Hz'
   
   print "Swirl number:",swirl_number(cta,150)
+  #print "Flow",swirl_number(cta,150)
     
   plt.grid()
   plt.plot( cta.x ,cta.U_aver,'x-',label=file_in[0][:-4]+' U') #prumer/U0
   plt.plot( cta.x ,cta.V_aver,'x-',label=file_in[0][:-4]+' V') #prumer/U0
-  plt.xlabel('r [mm]')
-  plt.ylabel('U [m/s]')
-  plt.legend()
-  plt.rcParams.update({'font.size': 20})
+  plt.xlabel('r [mm]',fontsize=16)
+  plt.ylabel('U [m/s]',fontsize=16)
+  plt.legend(loc=0)
+  plt.rcParams.update({'font.size': 12})
+  plt.show()
+  
+  plt.grid()
+  plt.plot( (cta.x/150) ,(cta.U_aver/3.5),'x-',label=file_in[0][:-4]+"$frac{U0}{U}$") #prumer/U0
+  plt.plot( (cta.x/150) ,(cta.V_aver/3.5),'x-',label=file_in[0][:-4]+' V') #prumer/U0
+  plt.xlabel('r [mm]',fontsize=16)
+  plt.ylabel('U [m/s]',fontsize=16)
+  plt.legend(loc=0)
+  plt.rcParams.update({'font.size': 12})
+  plt.show()
+  
+  plt.grid()
+  plt.plot( (cta.x) ,(cta.U_RMS),'x-',label=file_in[0][:-4]+' U') #prumer/U0
+  plt.plot( (cta.x) ,(cta.V_RMS),'x-',label=file_in[0][:-4]+' V') #prumer/U0
+  plt.xlabel('r [mm]',fontsize=16)
+  plt.ylabel('U [m/s]',fontsize=16)
+  plt.legend(loc=0)
+  plt.rcParams.update({'font.size': 12})
+  plt.show()
+  
+  plt.grid()
+  plt.plot( (cta.x) ,(cta.U_mag),'x-',label=file_in[0][:-4]+' U') #prumer/U0
+  plt.plot( (cta.x) ,(cta.phi),'x-',label=file_in[0][:-4]+"$sigma$") #prumer/U0
+  plt.xlabel('r [mm]',fontsize=16)
+  plt.ylabel('U [m/s]',fontsize=16)
+  plt.ylabel('angle',fontsize=16)
+  plt.legend(loc=0)
+  plt.rcParams.update({'font.size': 12})
   plt.show()
   
   fr,ps=cta.fft_analysis(3)[:2]
