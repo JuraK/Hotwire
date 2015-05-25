@@ -426,7 +426,6 @@ def swirl_number(hws,R):
     dr=np.array([R-r[0]])
     for i in range(0,r.shape[0]-1):
       dr=np.append(dr,r[i]-r[i+1])
-    for i in range(dr.shape[0]-1):
       Gy+=dr[i]/2*(hws.U_aver[i+1]*hws.V_aver[i+1]*r[i+1]**2+hws.U_aver[i]*hws.V_aver[i]*r[i]**2)
       Gx+=dr[i]/2*(hws.U_aver[i+1]**2*r[i+1]+hws.U_aver[i]**2*r[i])
     S=Gy/(R*Gx) #Swirl number based on Weber, Roman, and Jacques Dugué. 1992. 
@@ -448,36 +447,95 @@ def swirl_number(hws,R):
   count=0
   r=R-hws[0].x #TODO here it is pressumed, that x is sorted!
 
-  #---Calculates delta r  ---
   dr=np.array([R-r[0]])
-  for i in range(0,r.shape[0]-1):
-      dr=np.append(dr,r[i]-r[i+1])
-  #--------------------------
-  
   U_av=0
   V_av=0
   for h in hws:
     U_av=((U_av*count)+h.U_aver)/(count+1) #Running average from different inclinations
     V_av=((V_av*count)+h.V_aver)/(count+1) #Running average from different inclinations
     count+=1
-  for i in range(dr.shape[0]-1):
+    print U_av,V_av
+  for i in range(r.shape[0]-1):
+    dr=np.append(dr,r[i]-r[i+1])
     Gy+=dr[i]/2*(U_av[i+1]*V_av[i+1]*r[i+1]**2+U_av[i]*V_av[i]*r[i]**2) #Numericall integration 
     Gx+=dr[i]/2*(U_av[i+1]**2*r[i+1]+U_av[i]**2*r[i])
+  print dr, Gy, Gx
   S=Gy/(R*Gx) #Swirl number based on Weber, Roman, and Jacques Dugué. 1992. 
                  #“Combustion Accelerated Swirling Flows in High Confinements.” 
                  #Progress in Energy and Combustion Science 18 (4): 349–67. 
                  #doi:10.1016/0360-1285(92)90005-L.
   return S
   
-def flow_rate():
+def flow_rate(hws,R,phis):
+  from math import radians
+  '''
+  Calculates the volumetric flow rate based on supplied list of Hot Wire measurements.
+  Assumes radial position x [mm] measured from the wall to the center i.e. x[0]=2mm; x[-1]=150mm, R=150mm
+  radius is then calculated as r=R-x
   
-  #výpočet průtoku   
+  R [mm] - pipe radius
+  hws - list of HotWireMeasurement objects
+  phis [°] : list of angles of each hot wire measurement
+  '''
+
+  R=R/1000. #[m] Convert radius to meters
+  V=0
+  phis=[radians(p) for p in phis] #Convert from degrees [°] into radians [rad]
   
-   #☻U_av=0
-   #for h in hws:
-    #U_av=((U_av*count)+h.U_aver)/(count+1) #Running average from different inclinations
-   #for i in range(dr.shape[0]-1):
-    #S[i]=pi*(dr[i]/2*(U_av[i+1]*V_av[i+1]*r[i+1]**2+U_av[i]*V_av[i]*r[i]**2) #Numericall integration
+  try:
+    p=hws[0].positions
+  except AttributeError: #Single data set supplied into hws
+    print "Supplied single data set for swirl nuber calculation!"
+    r=R-hws.x/1000. #TODO here it is pressumed, that x is sorted!
+    dr=np.array([R-r[0]])
+       
+    for i in range(dr.shape[0]-1):
+      dr=np.append(dr,r[i]-r[i+1])
+      A=dr[i]/2*2*np.pi*(r[i]+r[i+1])
+      V+=hws.U_aver[i]*A
+    return V
+  
+  
+  #----Compare measured points if in same locations and proper order---
+  hx=hws[0].x
+  for h in hws[1:]:
+    if (not p==h.positions) or (not (h.x==hx).all):
+      print "Error: Positions are not the same in each data set, cannot calculate Swirl number!"
+      return -1
+    hx=h.x
+  #--------------------------------------------------------------------
+  
+  #------Sort list of classes based on their values------------
+  seq=[i for (v, i) in sorted((v, i) for (i, v) in enumerate(phis))]
+  phis=[phis[i] for i in seq]
+  hws=[hws[i] for i in seq]
+  #------------------------------------------------------------
+  
+  r=R-hws[0].x/1000. #TODO here it is pressumed, that x is sorted!
+
+  #---Calculates delta r; must be same for all measurements ----
+  dr=np.array([R-r[0]])
+  for i in range(0,r.shape[0]-1):
+      dr=np.append(dr,r[i]-r[i+1])
+  #-------------------------------------------------------------
+  plocha =0
+  #-----Numerical integration in form: V=int_0^R int_\phi_1^\phi_2 u r dr d\phi -------------
+  dphi=np.array([])
+  for n in range(len(phis)-1):# enumerate(zip(hws,phis)):
+    h=hws[n]
+    #phi=phis[n]
+    dphi=np.append(dphi,phis[n+1]-phis[n])
+    for i in range(len(dr)-1):
+#      A=dr[i]*dphi[n]*(r[i]+r[i+1])/2
+      A=dphi[n]/2*(r[i]**2-r[i+1]**2)
+      plocha+=A
+      #TODO check this form. Other option is:
+      V+=A*(hws[n].U_aver[i]+hws[n+1].U_aver[i]+hws[n].U_aver[i+1]+hws[n+1].U_aver[i+1])/4
+#      V+=dr[i]*dphi[n]*(hws[n].U_aver[i]*r[i]+hws[n+1].U_aver[i]*r[i]+hws[n].U_aver[i+1]*r[i+1]+hws[n+1].U_aver[i+1]*r[i+1])/4
+      
+  print "Celková plocha:", plocha*2*np.pi/(phis[-1]-phis[0])
+  print "Průtok:", V*2*np.pi/(phis[-1]-phis[0])*3600, "m3/h"
+  return V*2*np.pi/(phis[-1]-phis[0])
       
       
 if __name__ == "__main__":
