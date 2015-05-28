@@ -454,12 +454,12 @@ def swirl_number(hws,R):
     U_av=((U_av*count)+h.U_aver)/(count+1) #Running average from different inclinations
     V_av=((V_av*count)+h.V_aver)/(count+1) #Running average from different inclinations
     count+=1
-    print U_av,V_av
+    #print U_av,V_av
   for i in range(r.shape[0]-1):
     dr=np.append(dr,r[i]-r[i+1])
     Gy+=dr[i]/2*(U_av[i+1]*V_av[i+1]*r[i+1]**2+U_av[i]*V_av[i]*r[i]**2) #Numericall integration 
     Gx+=dr[i]/2*(U_av[i+1]**2*r[i+1]+U_av[i]**2*r[i])
-  print dr, Gy, Gx
+  #print dr, Gy, Gx
   S=Gy/(R*Gx) #Swirl number based on Weber, Roman, and Jacques Dugué. 1992. 
                  #“Combustion Accelerated Swirling Flows in High Confinements.” 
                  #Progress in Energy and Combustion Science 18 (4): 349–67. 
@@ -484,14 +484,28 @@ def flow_rate(hws,R,phis):
   
   try:
     p=hws[0].positions
+    if len(hws)==1:
+        print "Supplied single data set for swirl nuber calculation!"
+        r=R-hws[0].x/1000. #TODO here it is pressumed, that x is sorted!
+        #dr=np.array([R-r[0]])
+        A=np.pi*(R**2-r[0]**2)
+        V=hws[0].U_aver[0]*A   
+        for i in range(1,r.shape[0]-1):
+            A=np.pi*(r[i]**2-r[i+1]**2)
+#          dr=np.append(dr,r[i]-r[i+1])
+#          A=dr[i]/2*2*np.pi*(r[i]+r[i+1])
+            V+=hws[0].U_aver[i]*A
+        return V
   except AttributeError: #Single data set supplied into hws
     print "Supplied single data set for swirl nuber calculation!"
     r=R-hws.x/1000. #TODO here it is pressumed, that x is sorted!
-    dr=np.array([R-r[0]])
-       
-    for i in range(dr.shape[0]-1):
-      dr=np.append(dr,r[i]-r[i+1])
-      A=dr[i]/2*2*np.pi*(r[i]+r[i+1])
+    #dr=np.array([R-r[0]])
+    A=np.pi*(R**2-r[0]**2)
+    V=hws.U_aver[0]*A
+    for i in range(1,r.shape[0]-1):
+      A=np.pi*(r[i]**2-r[i+1]**2)
+      #dr=np.append(dr,r[i]-r[i+1])
+      #A=dr[i]/2*2*np.pi*(r[i]+r[i+1])
       V+=hws.U_aver[i]*A
     return V
   
@@ -507,6 +521,7 @@ def flow_rate(hws,R,phis):
   
   #------Sort list of classes based on their values------------
   seq=[i for (v, i) in sorted((v, i) for (i, v) in enumerate(phis))]
+  #print len(phis), len(hws)
   phis=[phis[i] for i in seq]
   hws=[hws[i] for i in seq]
   #------------------------------------------------------------
@@ -525,7 +540,9 @@ def flow_rate(hws,R,phis):
     h=hws[n]
     #phi=phis[n]
     dphi=np.append(dphi,phis[n+1]-phis[n])
-    for i in range(len(dr)-1):
+    A=dphi[n]/2*(R**2-r[0]**2)
+    V+=A*(hws[n].U_aver[0]+hws[n+1].U_aver[0]+hws[n].U_aver[0+1]+hws[n+1].U_aver[0+1])/4
+    for i in range(1,len(dr)-1):
 #      A=dr[i]*dphi[n]*(r[i]+r[i+1])/2
       A=dphi[n]/2*(r[i]**2-r[i+1]**2)
       plocha+=A
@@ -533,10 +550,10 @@ def flow_rate(hws,R,phis):
       V+=A*(hws[n].U_aver[i]+hws[n+1].U_aver[i]+hws[n].U_aver[i+1]+hws[n+1].U_aver[i+1])/4
 #      V+=dr[i]*dphi[n]*(hws[n].U_aver[i]*r[i]+hws[n+1].U_aver[i]*r[i]+hws[n].U_aver[i+1]*r[i+1]+hws[n+1].U_aver[i+1]*r[i+1])/4
       
-  print "Celková plocha:", plocha*2*np.pi/(phis[-1]-phis[0])
-  print "Průtok:", V*2*np.pi/(phis[-1]-phis[0])*3600, "m3/h"
+#  print "Celková plocha:", plocha*2*np.pi/(phis[-1]-phis[0])
+#  print "Průtok:", V*2*np.pi/(phis[-1]-phis[0])*3600, "m3/h"
   return V*2*np.pi/(phis[-1]-phis[0])
-      
+#      
       
 if __name__ == "__main__":
   import matplotlib.pyplot as plt
@@ -550,14 +567,16 @@ if __name__ == "__main__":
 #  directory='Viric_data/smazat/'
 #  file_in='ověřovací měření - zpracované.txt'
   directory='Viric_data/viric_240_25/0,1D/'
-  file_in='240_25_01_15.txt'
+  file_in='240_25_01_25.txt'
   
 #    cta.append(hw.HotWireMeasurement(directory+file_in,[[23.627550,-47.563171,36.200703,-13.087972,2.099148,0],[23.627550,-47.563171,36.200703,-13.087972,2.099148,0]]))
 #    cta.directional_calibration(12.18**0.5, 15.6**0.5)    
   cta=hw.HotWireMeasurement(directory+file_in, wire_temper=260)
-  peaks=cta.fft_analysis()
+  #peaks=cta.fft_analysis()
   print cta #Vytiskne informace o daném měření
-  print 'Significant frequencies: ',peaks,'Hz'
+  #print 'Significant frequencies: ',peaks,'Hz'
+  
+  V=flow_rate(cta,150,[10])
   
   print "Swirl number:",swirl_number(cta,150)
   #print "Flow",swirl_number(cta,150)
